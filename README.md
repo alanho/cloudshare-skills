@@ -12,13 +12,30 @@ https://purple-tiger-42.pages.dev/r/trip-options-9f3a/?token=4b7c8d2e1a9f
 
 ## Install
 
-Install into any agent supported by [vercel-labs/skills](https://github.com/vercel-labs/skills):
+Two steps: install the skill into your agent(s), then run setup once.
 
 ```bash
+# 1. Install the skill (works for Claude Code, Codex, OpenCode, +50 more)
 npx skills add alanho/cloudshare-skills
+
+# 2. Run the one-time setup (interactive — paste token, pick domain)
+curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
 ```
 
-Or target a specific agent:
+Or in one line:
+
+```bash
+npx skills add alanho/cloudshare-skills && \
+  curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
+```
+
+Why two steps? `npx skills` only copies files; it has no post-install hooks.
+The setup wizard is interactive and writes credentials to a fixed path
+(`~/.config/cloudshare/config.env`), so it must run separately in your
+terminal. After that, every agent that has the skill installed reads the same
+config.
+
+To target a specific agent:
 
 ```bash
 npx skills add alanho/cloudshare-skills -a claude-code
@@ -28,15 +45,15 @@ npx skills add alanho/cloudshare-skills -a opencode
 
 ## First-run setup (~3 min)
 
-On the first share, the skill walks you through:
+The setup wizard walks you through:
 
-1. Creating a Cloudflare account (free) at https://dash.cloudflare.com/sign-up
-2. Authenticating — either `npx wrangler login` (browser OAuth, recommended) or paste an API token from https://dash.cloudflare.com/profile/api-tokens with permissions:
+1. Creating a Cloudflare account (free) at https://dash.cloudflare.com/sign-up if you don't have one.
+2. Pasting a custom API token from https://dash.cloudflare.com/profile/api-tokens with permissions:
    - `Account: Cloudflare Pages: Edit`
    - `Account: Account Settings: Read`
 3. Picking your personal `cloudshare` subdomain. The wizard suggests something like `purple-tiger-42`; accept with Enter or type your own.
 
-Credentials and project name are saved to `~/.config/cloudshare/config.env` (chmod 600).
+Credentials and project name are saved to `~/.config/cloudshare/config.env` (chmod 600). Re-run setup any time to reconfigure.
 
 ## Usage
 
@@ -52,15 +69,20 @@ The skill calls `bash ./resources/deploy.sh <path-to-file-or-dir>` under the hoo
 
 ### Subcommands
 
+The agent invokes these via the skill. To run them yourself, point at whichever
+location your agent installed the skill into (e.g.
+`~/.claude/skills/cloudshare/` for Claude Code,
+`~/.codex/skills/cloudshare/` for Codex, etc.):
+
 ```bash
 # list all your past shares
-bash ~/.claude/skills/cloudshare/resources/list.sh
+bash <skill-dir>/resources/list.sh
 
 # delete one (revokes URL, keeps others)
-bash ~/.claude/skills/cloudshare/resources/delete.sh <slug>
+bash <skill-dir>/resources/delete.sh <slug>
 
 # rotate the token for one share (old token → 401, new URL printed)
-bash ~/.claude/skills/cloudshare/resources/rotate.sh <slug>
+bash <skill-dir>/resources/rotate.sh <slug>
 ```
 
 ## Security model
@@ -80,19 +102,26 @@ Cloudflare Pages free tier:
 - 100 MB per deploy total (mirror is redeployed on every share)
 - Unlimited bandwidth
 
+## Reset
+
+To reconfigure from scratch (new token, new domain), re-run setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
+```
+
+It will detect existing config and ask before overwriting.
+
 ## Uninstall
 
 ```bash
+# Remove the skill from your agent
 npx skills remove -a claude-code -s cloudshare
-```
 
-To also wipe your local mirror and config:
-```bash
+# Wipe local mirror and config
 rm -rf ~/.config/cloudshare
-```
 
-To delete the Cloudflare Pages project itself, log into the dashboard or run:
-```bash
+# Delete the Cloudflare Pages project itself (optional)
 npx wrangler pages project delete <your-project-name>
 ```
 

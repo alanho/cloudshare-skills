@@ -3,12 +3,12 @@ name: cloudshare
 description: Upload a local HTML file, image, PDF, or directory to Cloudflare
   Pages and return a token-protected shareable URL on the user's personal
   cloudshare subdomain (e.g. purple-tiger-42.pages.dev/r/<slug>/?token=<x>).
-  On first use, walks the user through Cloudflare account creation, API auth
-  setup, and choosing a personal subdomain; subsequent runs deploy with one
-  command. Trigger when the user asks to "share this file", "publish this
-  html", "make a shareable link", "upload to cloudflare", or invokes
-  /cloudshare. Also use when the user wants to list past shares, delete a
-  share, or rotate a share's token.
+  If the user has not yet set up cloudshare, instruct them to run a one-time
+  setup command in their terminal — the setup wizard is interactive and must
+  be run by the user, not the agent. Trigger when the user asks to "share this
+  file", "publish this html", "make a shareable link", "upload to cloudflare",
+  or invokes /cloudshare. Also use when the user wants to list past shares,
+  delete a share, or rotate a share's token.
 ---
 
 # cloudshare
@@ -25,27 +25,51 @@ the user's personal Cloudflare Pages subdomain.
 
 ## Architecture (one-liner)
 
-One Cloudflare Pages project per user (chosen at first-run). Each share lands
-at `/r/<slug>/` under that project, with its own random token stored in the
-project's `SHARE_TOKENS_JSON` env var. Middleware validates the token before
-serving any path under `/r/`.
+One Cloudflare Pages project per user (chosen at first-run setup). Each share
+lands at `/r/<slug>/` under that project, with its own random token stored in
+the project's `SHARE_TOKENS_JSON` env var. Middleware validates the token
+before serving any path under `/r/`.
 
 ## Companion scripts (in this skill's `resources/` dir)
 
-- `resources/setup.sh` — first-run wizard
 - `resources/deploy.sh` — share a file or directory
 - `resources/list.sh` — list past shares
 - `resources/delete.sh` — delete one share
 - `resources/rotate.sh` — rotate token on one share
 - `resources/lib/{auth,tokens,clipboard}.sh` — helpers
-- `resources/template/` — `_headers`, `functions/_middleware.js`, landing `index.html`
+- `resources/template/` — reference templates (already copied into user's mirror at setup time)
 
-When invoking these scripts, the agent should always use the absolute path of
-the skill directory (typically `~/.claude/skills/cloudshare/resources/...`).
+When invoking these scripts, use the absolute path of the skill directory.
+Different agents place skills in different locations — locate this SKILL.md
+file and resolve relative paths from its directory.
+
+## First-run setup is run by the user, not the agent
+
+The setup wizard is **interactive** (token paste, account selection, project
+name pick) and lives at the repo root, **decoupled from the skill install
+path**. Do not try to run it from inside the agent — it requires a real TTY.
+
+If `~/.config/cloudshare/config.env` does not exist (the share scripts will
+return exit code 2 with a clear message), tell the user to paste this into
+their terminal:
+
+```
+curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
+```
+
+The setup script will:
+1. Prompt for a Cloudflare API token (custom token with `Account: Cloudflare Pages: Edit` + `Account: Account Settings: Read`).
+2. Detect the account (or prompt to pick if multiple).
+3. Suggest a friendly subdomain (e.g. `purple-tiger-42`); user can accept or override.
+4. Create the Cloudflare Pages project, initialize the local mirror at `~/.config/cloudshare/projects/<name>/`, and set `SHARE_TOKENS_JSON='{}'`.
+5. Save credentials to `~/.config/cloudshare/config.env` (chmod 600).
+
+After setup, all shares from any agent (Claude Code, Codex, OpenCode, etc.)
+read the same `~/.config/cloudshare/config.env` and target the same project.
 
 ## Prerequisites check
 
-Run these checks first; abort with a clear message if anything is missing:
+Before invoking any share script, optionally verify:
 
 ```bash
 command -v openssl >/dev/null   || { echo "openssl required"; exit 1; }
@@ -55,74 +79,44 @@ command -v curl    >/dev/null   || { echo "curl required"; exit 1; }
 
 `wrangler` is invoked via `npx wrangler@latest` — no global install needed.
 
-## First-run setup
-
-Check whether `~/.config/cloudshare/config.env` exists and has all of
-`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `PROJECT_NAME`. If not,
-delegate to the setup wizard:
-
-```bash
-bash <SKILL_DIR>/resources/setup.sh
-```
-
-The wizard:
-1. Prompts the user to create or sign into a free Cloudflare account.
-2. Walks through creating a custom API token with two scopes:
-   - `Account: Cloudflare Pages: Edit`
-   - `Account: Account Settings: Read`
-3. Verifies the token via the Cloudflare API.
-4. Auto-resolves Account ID (or prompts to pick if multiple).
-5. Suggests a friendly subdomain (adjective-noun-NN) and lets the user accept or override.
-6. Validates the project name (lowercase alphanumeric + hyphens, ≤58 chars) and global uniqueness.
-7. Creates the Pages project, initializes the local mirror, sets `SHARE_TOKENS_JSON='{}'`, and does an initial deploy.
-8. Saves credentials to `~/.config/cloudshare/config.env` with `chmod 600`.
-
-The wizard is interactive — relay any prompts directly to the user.
-
 ## Share workflow
-
-For a single share, call:
 
 ```bash
 bash <SKILL_DIR>/resources/deploy.sh <absolute-path-to-file-or-dir>
 ```
 
-The script will:
-1. Run setup if needed.
-2. Generate a slug from the filename (e.g. `trip-options-9f3a`).
-3. Generate a 32-hex-char token.
-4. Stage the content into the local mirror at
-   `~/.config/cloudshare/projects/<project>/r/<slug>/`.
-5. Update `SHARE_TOKENS_JSON` via the Cloudflare API.
-6. Redeploy the whole mirror via `npx wrangler@latest pages deploy`.
-7. Print **the canonical URL on a single line starting with `URL: `** so the
-   agent can extract it reliably:
+The script:
+1. Loads config from `~/.config/cloudshare/config.env`.
+2. If config missing, exits 2 with a setup instruction. **Relay the setup
+   command verbatim to the user.**
+3. Generates a slug from the filename (e.g. `trip-options-9f3a`).
+4. Generates a 32-hex-char token.
+5. Stages content into the local mirror.
+6. Updates `SHARE_TOKENS_JSON` via the Cloudflare API.
+7. Redeploys via `npx wrangler@latest pages deploy`.
+8. Prints the canonical URL on a single line starting with `URL: `:
    ```
    URL: https://<project>.pages.dev/r/<slug>/?token=<hex>
    ```
-8. Copy the URL to the clipboard.
-9. Append a row to `~/.config/cloudshare/shares.log`.
+9. Copies URL to clipboard.
+10. Appends to `~/.config/cloudshare/shares.log`.
 
-After running, present the URL prominently to the user. Mention the clipboard
-copy. Note that **anyone with the URL has access** — treat it like a password.
+After running, present the URL prominently. Mention the clipboard copy. Note
+that **anyone with the URL has access** — treat it like a password.
 
 ## Subcommands
 
 ```bash
-# List all past shares (slug, timestamp, URL)
-bash <SKILL_DIR>/resources/list.sh
-
-# Delete one share (revokes its URL, leaves others untouched)
-bash <SKILL_DIR>/resources/delete.sh <slug>
-
-# Rotate the token on one share (old token → 401, new URL printed)
-bash <SKILL_DIR>/resources/rotate.sh <slug>
+bash <SKILL_DIR>/resources/list.sh                # list past shares
+bash <SKILL_DIR>/resources/delete.sh <slug>       # revoke + delete a share
+bash <SKILL_DIR>/resources/rotate.sh <slug>       # rotate token; old → 401
 ```
+
+All three exit 2 with the same setup instruction if config is missing.
 
 ## Output format
 
-When emitting a URL to the user, lead with the URL on its own line, then a
-short success block. Example:
+Lead with the URL on its own line, then a short success block. Example:
 
 ```
 https://purple-tiger-42.pages.dev/r/trip-options-9f3a/?token=4b7c8d2e1a9f1234
@@ -140,6 +134,7 @@ https://purple-tiger-42.pages.dev/r/trip-options-9f3a/?token=4b7c8d2e1a9f1234
 
 ## Common failure modes
 
+- **Scripts exit 2 with "not set up yet"** → user has not run the curl-pipe setup. Ask them to.
 - **Token verification fails during setup** → user pasted a token without correct scopes; instruct them to recreate at https://dash.cloudflare.com/profile/api-tokens.
 - **Project name taken** → wizard loops, ask user for a different name.
 - **Source > 90 MB** → Cloudflare's per-deploy limit. Ask user to slim the input.

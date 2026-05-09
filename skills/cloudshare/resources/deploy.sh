@@ -14,10 +14,18 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cs_config_dir="${CLOUDSHARE_CONFIG_DIR:-$HOME/.config/cloudshare}"
 
-# If config is missing, run setup first.
+# If config is missing, instruct the user to run setup in their own terminal.
+# (The setup wizard is interactive and lives at the repo root, deliberately
+# decoupled from any agent's skill install path.)
 if ! cs_load_config 2>/dev/null; then
-  bash "${script_dir}/setup.sh"
-  cs_load_config
+  cat >&2 <<'SETUP_REQUIRED'
+✗ cloudshare is not set up yet. Run this once in your terminal:
+
+  curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
+
+Then re-run this share command.
+SETUP_REQUIRED
+  exit 2
 fi
 
 input="${1:-}"

@@ -11,8 +11,12 @@ cs_config_dir="${CLOUDSHARE_CONFIG_DIR:-$HOME/.config/cloudshare}"
 log_file="${cs_config_dir}/shares.log"
 
 if ! cs_load_config 2>/dev/null; then
-  echo "✗ Not set up yet. Run setup first." >&2
-  exit 1
+  cat >&2 <<'SETUP_REQUIRED'
+✗ cloudshare is not set up yet. Run this once in your terminal:
+
+  curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
+SETUP_REQUIRED
+  exit 2
 fi
 
 if [ ! -s "$log_file" ]; then

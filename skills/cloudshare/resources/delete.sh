@@ -12,8 +12,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cs_config_dir="${CLOUDSHARE_CONFIG_DIR:-$HOME/.config/cloudshare}"
 
 if ! cs_load_config 2>/dev/null; then
-  echo "✗ Not set up. Run setup first." >&2
-  exit 1
+  cat >&2 <<'SETUP_REQUIRED'
+✗ cloudshare is not set up yet. Run this once in your terminal:
+
+  curl -fsSL https://raw.githubusercontent.com/alanho/cloudshare-skills/main/setup.sh | bash
+SETUP_REQUIRED
+  exit 2
 fi
 
 slug="${1:-}"
