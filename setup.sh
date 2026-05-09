@@ -22,6 +22,38 @@ else
   TTY=/dev/stdin
 fi
 
+# Helper: read a line from $TTY and strip surrounding whitespace + CR.
+# Some terminals/clipboards leave \r or trailing spaces that break validation.
+read_tty() {
+  local _line
+  IFS= read -r _line < "$TTY" || true
+  _line="${_line%$'\r'}"           # strip trailing CR
+  _line="${_line#"${_line%%[![:space:]]*}"}"  # ltrim
+  _line="${_line%"${_line##*[![:space:]]}"}"  # rtrim
+  printf '%s' "$_line"
+}
+
+# Helper: retry curl up to 3 times with brief backoff on connection errors.
+# Surfaces the final error if all attempts fail.
+cf_curl() {
+  local attempt
+  local out
+  for attempt in 1 2 3; do
+    if out=$(curl --connect-timeout 10 --max-time 30 -sS "$@" 2>&1); then
+      printf '%s' "$out"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      echo "  ⚠️  Cloudflare API request failed (attempt ${attempt}/3): $out" >&2
+      sleep $((attempt * 2))
+    fi
+  done
+  echo "✗ Cloudflare API unreachable after 3 attempts." >&2
+  echo "  Last error: $out" >&2
+  echo "  Check: VPN, DNS, firewall blocking api.cloudflare.com." >&2
+  return 1
+}
+
 config_dir="${CLOUDSHARE_CONFIG_DIR:-$HOME/.config/cloudshare}"
 config_file="${config_dir}/config.env"
 
@@ -49,7 +81,7 @@ if [ -f "$config_file" ]; then
     echo "  Domain: https://${PROJECT_NAME}.pages.dev/"
     echo
     printf "Reconfigure from scratch? [y/N]: "
-    read -r ans < "$TTY"
+    ans=$(read_tty)
     [ "$ans" = "y" ] || [ "$ans" = "Y" ] || { echo "Setup skipped."; exit 0; }
     rm -f "$config_file"
     unset PROJECT_NAME CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
@@ -72,12 +104,12 @@ echo "  • Account → Account Settings → Read"
 echo
 printf "Paste API token: "
 stty -echo < "$TTY" 2>/dev/null || true
-read -r CLOUDFLARE_API_TOKEN < "$TTY"
+CLOUDFLARE_API_TOKEN=$(read_tty)
 stty echo < "$TTY" 2>/dev/null || true
 echo
 
-verify_resp=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-  https://api.cloudflare.com/client/v4/user/tokens/verify || true)
+verify_resp=$(cf_curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  https://api.cloudflare.com/client/v4/user/tokens/verify) || exit 1
 if ! printf '%s' "$verify_resp" | grep -q '"success":true'; then
   echo "✗ Token verification failed. Check the scopes and try again." >&2
   exit 1
@@ -88,8 +120,8 @@ echo
 # ── Step 2: Account ID ───────────────────────────────────────────────────────
 echo "Step 2/3: Cloudflare Account"
 echo
-accounts_json=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-  https://api.cloudflare.com/client/v4/accounts)
+accounts_json=$(cf_curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  https://api.cloudflare.com/client/v4/accounts) || exit 1
 
 account_count=$(printf '%s' "$accounts_json" | node -e '
   const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
@@ -119,7 +151,7 @@ case "$account_count" in
       d.result.forEach((a, i) => console.log(`  ${i+1}. ${a.name} (${a.id})`));
     '
     printf "Pick number: "
-    read -r pick < "$TTY"
+    pick=$(read_tty)
     CLOUDFLARE_ACCOUNT_ID=$(printf '%s' "$accounts_json" | node -e "
       const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
       process.stdout.write(d.result[${pick}-1].id);
@@ -164,23 +196,28 @@ suggest_slug() {
 while :; do
   suggested=$(suggest_slug)
   printf "Suggested: %s.pages.dev  [Enter to accept, or type your own]: " "$suggested"
-  read -r picked < "$TTY"
+  picked=$(read_tty)
   PROJECT_NAME="${picked:-$suggested}"
 
   # Validate name: lowercase alphanumeric + hyphens, 1-58 chars, no leading/trailing hyphen.
   if ! printf '%s' "$PROJECT_NAME" | grep -qE '^[a-z0-9]([a-z0-9-]{0,56}[a-z0-9])?$'; then
-    echo "  ✗ Invalid. Use lowercase letters, digits, hyphens (no leading/trailing hyphen, max 58 chars)."
+    echo "  ✗ Invalid: '${PROJECT_NAME}'. Use lowercase letters, digits, hyphens"
+    echo "    (no leading/trailing hyphen, max 58 chars, no spaces or other chars)."
     continue
   fi
 
-  status=$(curl -sS -o /dev/null -w '%{http_code}' \
+  # Cloudflare API returns 404 if the project doesn't exist (= available).
+  status=$(curl --connect-timeout 10 --max-time 30 -sS -o /dev/null -w '%{http_code}' \
     -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-    "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}")
+    "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}" \
+    2>/dev/null || echo "000")
 
   case "$status" in
     404) echo "  ✓ ${PROJECT_NAME}.pages.dev is available"; break ;;
     200) echo "  ✗ ${PROJECT_NAME} is already in your account. Try a different name." ;;
-    *)   echo "  ✗ Cloudflare API returned $status. Try a different name." ;;
+    000) echo "  ⚠️  Could not reach api.cloudflare.com (network / DNS / VPN issue). Retrying..."
+         sleep 2 ;;
+    *)   echo "  ✗ Cloudflare API returned HTTP $status. Try a different name." ;;
   esac
 done
 echo
@@ -188,11 +225,11 @@ echo
 # ── Create the Pages project ─────────────────────────────────────────────────
 echo "Creating Cloudflare Pages project: ${PROJECT_NAME}..."
 create_payload=$(node -e "process.stdout.write(JSON.stringify({name: '${PROJECT_NAME}', production_branch: 'main'}))")
-create_resp=$(curl -sS -X POST \
+create_resp=$(cf_curl -X POST \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d "$create_payload" \
-  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects")
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects") || exit 1
 if ! printf '%s' "$create_resp" | grep -q '"success":true'; then
   echo "✗ Failed to create project:" >&2
   printf '%s\n' "$create_resp" >&2
@@ -296,11 +333,11 @@ init_payload=$(node -e '
   };
   process.stdout.write(JSON.stringify(body));
 ')
-patch_resp=$(curl -sS -X PATCH \
+patch_resp=$(cf_curl -X PATCH \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d "$init_payload" \
-  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}")
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}") || exit 1
 if ! printf '%s' "$patch_resp" | grep -q '"success":true'; then
   echo "⚠️  Warning: failed to set SHARE_TOKENS_JSON env var; continuing anyway." >&2
   printf '%s\n' "$patch_resp" >&2
