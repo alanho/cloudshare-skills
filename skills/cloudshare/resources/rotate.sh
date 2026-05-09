@@ -35,12 +35,13 @@ echo "→ Updating token map..."
 bash "${script_dir}/lib/tokens.sh" rotate "$slug" "$new_token"
 
 echo "→ Redeploying..."
-CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
-CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
-  npx --yes wrangler@latest pages deploy "${mirror_dir}" \
-    --project-name "${PROJECT_NAME}" \
-    --branch main \
-    --commit-dirty=true >/dev/null
+( cd "${mirror_dir}" && \
+  CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
+  CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+    npx --yes wrangler@latest pages deploy . \
+      --project-name "${PROJECT_NAME}" \
+      --branch main \
+      --commit-dirty=true >/dev/null )
 
 new_url="https://${PROJECT_NAME}.pages.dev/r/${slug}/?token=${new_token}"
 

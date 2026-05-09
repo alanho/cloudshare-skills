@@ -41,12 +41,13 @@ echo "→ Removing token from CF env var..."
 bash "${script_dir}/lib/tokens.sh" remove "$slug"
 
 echo "→ Redeploying..."
-CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
-CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
-  npx --yes wrangler@latest pages deploy "${mirror_dir}" \
-    --project-name "${PROJECT_NAME}" \
-    --branch main \
-    --commit-dirty=true >/dev/null
+( cd "${mirror_dir}" && \
+  CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
+  CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+    npx --yes wrangler@latest pages deploy . \
+      --project-name "${PROJECT_NAME}" \
+      --branch main \
+      --commit-dirty=true >/dev/null )
 
 # Mark as deleted in log.
 log_file="${cs_config_dir}/shares.log"

@@ -27,15 +27,20 @@ fi
 printf '%-22s  %-32s  %s\n' "WHEN" "SLUG" "URL"
 printf '%-22s  %-32s  %s\n' "----" "----" "---"
 
-# Track deleted slugs to skip them.
-deleted=$(grep -E '^# .*deleted' "$log_file" 2>/dev/null | awk '{print $NF}' | sort -u)
+# Track deleted slugs to skip them. `|| true` because grep returns 1 when
+# there are no matches yet, which `set -e` + `pipefail` would treat as fatal.
+deleted=$(grep -E '^# .*deleted' "$log_file" 2>/dev/null | awk '{print $NF}' | sort -u || true)
 
 while IFS='|' read -r ts slug src token; do
   ts=$(printf '%s' "$ts" | xargs)
   slug=$(printf '%s' "$slug" | xargs)
+  # Skip empty lines and `#`-prefixed marker lines (setup-complete, deleted, etc.)
   [ -z "$slug" ] && continue
-  [ "${slug:0:1}" = "#" ] && continue
-  echo "$deleted" | grep -qx "$slug" && continue
+  [ "${ts:0:1}" = "#" ] && continue
+  # Skip slugs that have been deleted.
+  if [ -n "$deleted" ] && printf '%s\n' "$deleted" | grep -qx "$slug"; then
+    continue
+  fi
 
   printf '%-22s  %-32s  https://%s.pages.dev/r/%s/?token=%s\n' \
     "$ts" "$slug" "$PROJECT_NAME" "$slug" "$(printf '%s' "$token" | xargs)"

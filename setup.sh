@@ -370,13 +370,18 @@ if ! cf_ok "$patch_resp"; then
 fi
 
 # ── First deploy ─────────────────────────────────────────────────────────────
+# IMPORTANT: cd into the mirror dir before deploying. Wrangler only auto-detects
+# `functions/` for Pages Functions when cwd == deploy dir. With an absolute
+# path arg, the functions/ dir is silently skipped (uses_functions: false) and
+# the token gate never runs. Bug surfaced during real deploy testing.
 echo "Deploying initial mirror..."
-CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
-CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
-  npx --yes wrangler@latest pages deploy "${mirror_dir}" \
-    --project-name "${PROJECT_NAME}" \
-    --branch main \
-    --commit-dirty=true >/dev/null
+( cd "${mirror_dir}" && \
+  CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
+  CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+    npx --yes wrangler@latest pages deploy . \
+      --project-name "${PROJECT_NAME}" \
+      --branch main \
+      --commit-dirty=true >/dev/null )
 
 # ── Append marker to share log ───────────────────────────────────────────────
 log_file="${config_dir}/shares.log"

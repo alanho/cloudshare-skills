@@ -91,14 +91,16 @@ fi
 echo "→ Registering token..."
 bash "${script_dir}/lib/tokens.sh" add "$slug" "$token"
 
-# Redeploy mirror.
+# Redeploy mirror. cd into mirror so wrangler detects `functions/` for the
+# Pages Functions middleware (token gate). Without this it silently skips.
 echo "→ Deploying..."
-CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
-CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
-  npx --yes wrangler@latest pages deploy "${mirror_dir}" \
-    --project-name "${PROJECT_NAME}" \
-    --branch main \
-    --commit-dirty=true >/dev/null
+( cd "${mirror_dir}" && \
+  CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
+  CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+    npx --yes wrangler@latest pages deploy . \
+      --project-name "${PROJECT_NAME}" \
+      --branch main \
+      --commit-dirty=true >/dev/null )
 
 # Build and emit URL.
 share_url="https://${PROJECT_NAME}.pages.dev/r/${slug}/?token=${token}"

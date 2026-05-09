@@ -29,19 +29,22 @@ fetch_tokens_json() {
               "$PROJECT_URL")
   printf '%s' "$resp" | node -e '
     const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
-    if (!data.success) {
+    if (data.success !== true) {
       process.stderr.write("Cloudflare API error: " + JSON.stringify(data.errors || data) + "\n");
       process.exit(1);
     }
     const env = ((data.result || {}).deployment_configs || {}).production || {};
     const ev = env.env_vars || {};
     const tok = ev.SHARE_TOKENS_JSON;
-    if (!tok || !tok.value) { process.stdout.write("{}"); return; }
-    try {
-      JSON.parse(tok.value);
-      process.stdout.write(tok.value);
-    } catch (e) {
+    if (!tok || !tok.value) {
       process.stdout.write("{}");
+    } else {
+      try {
+        JSON.parse(tok.value);
+        process.stdout.write(tok.value);
+      } catch (e) {
+        process.stdout.write("{}");
+      }
     }
   '
 }
@@ -70,7 +73,7 @@ patch_tokens_json() {
 
   printf '%s' "$resp" | node -e '
     const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
-    if (!d.success) {
+    if (d.success !== true) {
       process.stderr.write("Cloudflare API error: " + JSON.stringify(d.errors || d) + "\n");
       process.exit(1);
     }
