@@ -54,6 +54,18 @@ cf_curl() {
   return 1
 }
 
+# Helper: returns 0 iff Cloudflare API response is JSON with success:true.
+# Uses node (already required by `npx skills` and `npx wrangler`) so we
+# get a real JSON parser instead of brittle regex over pretty-printed JSON.
+cf_ok() {
+  printf '%s' "$1" | node -e '
+    try {
+      const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      process.exit(d && d.success === true ? 0 : 1);
+    } catch (e) { process.exit(1); }
+  '
+}
+
 config_dir="${CLOUDSHARE_CONFIG_DIR:-$HOME/.config/cloudshare}"
 config_file="${config_dir}/config.env"
 
@@ -110,7 +122,7 @@ echo
 
 verify_resp=$(cf_curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
   https://api.cloudflare.com/client/v4/user/tokens/verify) || exit 1
-if ! printf '%s' "$verify_resp" | grep -q '"success":true'; then
+if ! cf_ok "$verify_resp"; then
   echo "✗ Token verification failed. Check the scopes and try again." >&2
   exit 1
 fi
@@ -193,6 +205,8 @@ suggest_slug() {
   printf '%s-%s-%02d' "$adj" "$noun" "$num"
 }
 
+REUSE_EXISTING=0
+
 while :; do
   suggested=$(suggest_slug)
   printf "Suggested: %s.pages.dev  [Enter to accept, or type your own]: " "$suggested"
@@ -214,7 +228,15 @@ while :; do
 
   case "$status" in
     404) echo "  ✓ ${PROJECT_NAME}.pages.dev is available"; break ;;
-    200) echo "  ✗ ${PROJECT_NAME} is already in your account. Try a different name." ;;
+    200)
+      echo "  ⚠️  ${PROJECT_NAME} already exists in your account."
+      printf "  Reuse it? [Y/n]: "
+      ans=$(read_tty)
+      if [ -z "$ans" ] || [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+        REUSE_EXISTING=1
+        break
+      fi
+      ;;
     000) echo "  ⚠️  Could not reach api.cloudflare.com (network / DNS / VPN issue). Retrying..."
          sleep 2 ;;
     *)   echo "  ✗ Cloudflare API returned HTTP $status. Try a different name." ;;
@@ -222,20 +244,24 @@ while :; do
 done
 echo
 
-# ── Create the Pages project ─────────────────────────────────────────────────
-echo "Creating Cloudflare Pages project: ${PROJECT_NAME}..."
-create_payload=$(node -e "process.stdout.write(JSON.stringify({name: '${PROJECT_NAME}', production_branch: 'main'}))")
-create_resp=$(cf_curl -X POST \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "$create_payload" \
-  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects") || exit 1
-if ! printf '%s' "$create_resp" | grep -q '"success":true'; then
-  echo "✗ Failed to create project:" >&2
-  printf '%s\n' "$create_resp" >&2
-  exit 1
+# ── Create the Pages project (or skip if reusing existing) ───────────────────
+if [ "$REUSE_EXISTING" -eq 1 ]; then
+  echo "Reusing existing Cloudflare Pages project: ${PROJECT_NAME}"
+else
+  echo "Creating Cloudflare Pages project: ${PROJECT_NAME}..."
+  create_payload=$(node -e "process.stdout.write(JSON.stringify({name: '${PROJECT_NAME}', production_branch: 'main'}))")
+  create_resp=$(cf_curl -X POST \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$create_payload" \
+    "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects") || exit 1
+  if ! cf_ok "$create_resp"; then
+    echo "✗ Failed to create project:" >&2
+    printf '%s\n' "$create_resp" >&2
+    exit 1
+  fi
+  echo "✓ Project created"
 fi
-echo "✓ Project created"
 
 # ── Initialize local mirror with embedded templates ──────────────────────────
 mirror_dir="${config_dir}/projects/${PROJECT_NAME}"
@@ -338,7 +364,7 @@ patch_resp=$(cf_curl -X PATCH \
   -H "Content-Type: application/json" \
   -d "$init_payload" \
   "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}") || exit 1
-if ! printf '%s' "$patch_resp" | grep -q '"success":true'; then
+if ! cf_ok "$patch_resp"; then
   echo "⚠️  Warning: failed to set SHARE_TOKENS_JSON env var; continuing anyway." >&2
   printf '%s\n' "$patch_resp" >&2
 fi

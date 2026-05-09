@@ -35,7 +35,12 @@ cs_verify_token() {
   local tok="$1"
   curl -sS -H "Authorization: Bearer $tok" \
     https://api.cloudflare.com/client/v4/user/tokens/verify \
-    | grep -q '"success":true'
+    | node -e '
+        try {
+          const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+          process.exit(d && d.success === true ? 0 : 1);
+        } catch (e) { process.exit(1); }
+      '
 }
 
 # Helper: list accounts the token can access.
